@@ -31,6 +31,11 @@ cloudinary.config({
 let storage = new CloudinaryStorage({cloudinary})
 let recep = multer({storage});
 
+// Health check route
+app.get("/", (req, res) => {
+  res.json({ message: "Instagram Clone Backend is running!" });
+});
+
 app.post("/upload", recep.single("file"), 
 (req, res) => {
   try {

@@ -1,29 +1,69 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import { FiHome, FiPlusSquare, FiMessageCircle, FiLogOut, FiMenu, FiX, FiSearch, FiHeart, FiSettings } from 'react-icons/fi';
 import { FaInstagram } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
+import { io } from 'socket.io-client';
+import api from '../services/api';
+import LogoutModal from './LogoutModal';
 
 const Navbar = () => {
   const { currentUser, logout } = useContext(AuthContext);
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
-  const handleLogout = () => {
-    logout();
+  useEffect(() => {
+    if (!currentUser?.username) return;
+    
+    const fetchCounts = async () => {
+      try {
+        // Notifications
+        const resNotif = await api.get(`/notifications/${currentUser.username}`);
+        const countNotif = (resNotif.data || []).filter(n => !n.isRead).length;
+        setUnreadCount(countNotif);
+
+        // Unread Messages
+        const resDMs = await api.get(`/messages/unread-total/${currentUser.username}`);
+        setUnreadMessages(resDMs.data.total || 0);
+      } catch (_) {}
+    };
+
+    fetchCounts();
+    const interval = setInterval(fetchCounts, 15000); // 15s polling fallback
+
+    // Socket listener for instant updates
+    const socket = io('http://localhost:3000');
+    socket.emit('join', currentUser.username);
+    socket.on('receive_message', () => {
+       setUnreadMessages(prev => prev + 1);
+    });
+
+    return () => {
+      clearInterval(interval);
+      socket.disconnect();
+    };
+  }, [currentUser]);
+
+  const handleLogout = () => setShowLogoutModal(true);
+  const confirmLogout = async () => {
+    setShowLogoutModal(false);
+    await logout();
     navigate('/login');
   };
 
   if (!currentUser) return null;
 
-  const NavLink = ({ to, icon: Icon, label }) => {
+  const NavLink = ({ to, icon: Icon, label, badge }) => {
     const isActive = location.pathname === to;
     return (
       <Link 
         to={to} 
-        onClick={() => setMobileMenuOpen(false)}
+        onClick={() => { setMobileMenuOpen(false); if (to === '/notifications') setUnreadCount(0); }}
         className={`flex items-center gap-4 p-3 rounded-2xl transition-all duration-300 relative group
           ${isActive ? 'text-gray-900 font-bold' : 'text-gray-600 hover:bg-gray-50/50 hover:text-gray-900 font-medium'}`}
       >
@@ -35,13 +75,27 @@ const Navbar = () => {
           />
         )}
         <div className="relative z-10 flex items-center gap-4">
-          <motion.div 
-            whileHover={{ scale: 1.1, rotate: isActive ? 0 : -5 }}
-            whileTap={{ scale: 0.95 }}
-            className={`text-2xl ${isActive ? 'text-pink-600' : 'text-gray-700'}`}
-          >
-            <Icon />
-          </motion.div>
+          <div className="relative">
+            <motion.div 
+              whileHover={{ scale: 1.1, rotate: isActive ? 0 : -5 }}
+              whileTap={{ scale: 0.95 }}
+              className={`text-2xl ${isActive ? 'text-pink-600' : 'text-gray-700'}`}
+            >
+              <Icon />
+            </motion.div>
+            {badge > 0 && (
+              <AnimatePresence>
+                <motion.span
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  exit={{ scale: 0 }}
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center shadow-md"
+                >
+                  {badge > 9 ? '9+' : badge}
+                </motion.span>
+              </AnimatePresence>
+            )}
+          </div>
           <span className="hidden lg:block text-base tracking-wide">{label}</span>
         </div>
       </Link>
@@ -84,8 +138,8 @@ const Navbar = () => {
           <NavLink to="/" icon={FiHome} label="Home" />
           <NavLink to="/search" icon={FiSearch} label="Search" />
           <NavLink to="/upload" icon={FiPlusSquare} label="Create" />
-          <NavLink to="/chat" icon={FiMessageCircle} label="Messages" />
-          <NavLink to="/notifications" icon={FiHeart} label="Notifications" />
+          <NavLink to="/chat" icon={FiMessageCircle} label="Messages" badge={unreadMessages} />
+          <NavLink to="/notifications" icon={FiHeart} label="Notifications" badge={unreadCount} />
           <NavLink to="/profile" icon={FiSettings} label="Profile" />
         </div>
 
@@ -94,8 +148,16 @@ const Navbar = () => {
           <div className="flex items-center gap-3 p-2 mb-4 hover:bg-gray-50/80 rounded-2xl cursor-pointer transition-colors backdrop-blur-md">
             <div className="relative">
               <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-orange-400 via-pink-500 to-purple-600 p-[2px]">
-                <div className="w-full h-full bg-white rounded-full flex items-center justify-center font-bold text-gray-800 text-sm overflow-hidden">
-                   {currentUser?.username?.charAt(0).toUpperCase()}
+                <div className="w-full h-full bg-white rounded-full flex items-center justify-center font-bold text-gray-800 text-sm overflow-hidden border border-white shadow-sm transition-transform hover:scale-105">
+                   {currentUser?.pfp_url ? (
+                     <img 
+                       src={currentUser.pfp_url} 
+                       alt="Profile" 
+                       className="w-full h-full object-cover" 
+                     />
+                   ) : (
+                     currentUser?.username?.charAt(0).toUpperCase()
+                   )}
                 </div>
               </div>
               <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
@@ -119,7 +181,7 @@ const Navbar = () => {
 
       {/* Mobile Backdrop */}
       <AnimatePresence>
-        {mobileMenuOpen && (
+      {mobileMenuOpen && (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -129,6 +191,14 @@ const Navbar = () => {
           />
         )}
       </AnimatePresence>
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutModal && (
+        <LogoutModal
+          onConfirm={confirmLogout}
+          onCancel={() => setShowLogoutModal(false)}
+        />
+      )}
     </>
   );
 };

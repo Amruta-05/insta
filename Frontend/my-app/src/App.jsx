@@ -13,6 +13,7 @@ import Chat from './pages/Chat';
 import Profile from './pages/Profile';
 import Search from './pages/Search';
 import Notifications from './pages/Notifications';
+import YourActivity from './pages/YourActivity';
 
 // Layout wrapper for protected routes
 const MainLayout = ({ children }) => {
@@ -77,6 +78,16 @@ const App = () => {
             } 
           />
           <Route 
+            path="/profile/:username" 
+            element={
+              <ProtectedRoute>
+                <MainLayout>
+                  <Profile />
+                </MainLayout>
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
             path="/search" 
             element={
               <ProtectedRoute>
@@ -92,6 +103,17 @@ const App = () => {
               <ProtectedRoute>
                 <MainLayout>
                   <Notifications />
+                </MainLayout>
+              </ProtectedRoute>
+            } 
+          />
+          
+          <Route 
+            path="/activity" 
+            element={
+              <ProtectedRoute>
+                <MainLayout>
+                  <YourActivity />
                 </MainLayout>
               </ProtectedRoute>
             } 

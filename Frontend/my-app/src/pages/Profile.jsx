@@ -5,11 +5,16 @@ import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import PostCard from '../components/PostCard';
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 const Profile = () => {
-  const { currentUser, logout } = useContext(AuthContext);
+  const { currentUser, logout, refreshCurrentUser } = useContext(AuthContext);
+  const { username: paramUsername } = useParams();
   const navigate = useNavigate();
+  
+  const targetUsername = paramUsername || currentUser?.username;
+  const isMe = targetUsername === currentUser?.username;
+
   const [myPosts, setMyPosts] = useState([]);
   const [savedPosts, setSavedPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,35 +30,47 @@ const Profile = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [selectedPost, setSelectedPost] = useState(null);
 
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [profileData, setProfileData] = useState(null);
+  const [isPrivateAccount, setIsPrivateAccount] = useState(false);
+
   useEffect(() => {
     const fetchMyPosts = async () => {
-      if (!currentUser) return;
+      if (!targetUsername) return;
       try {
-        const response = await api.get(`/files?username=${currentUser.username}`);
+        const response = await api.get(`/files?username=${targetUsername}&currentUsername=${currentUser?.username}`);
         const data = response.data.files || response.data || [];
         const sorted = Array.isArray(data) ? data.sort((a, b) => new Date(b.upload_time || b.createdAt) - new Date(a.upload_time || a.createdAt)) : [];
         setMyPosts(sorted);
+        setIsPrivateAccount(false);
       } catch (error) {
+        if (error.response?.status === 403) {
+          setIsPrivateAccount(true);
+          setMyPosts([]);
+        }
         console.error("Error fetching user posts:", error);
       } finally {
         setLoading(false);
       }
     };
     
-    fetchMyPosts();
-    
     const fetchProfileData = async () => {
-      if (!currentUser) return;
+      if (!targetUsername) return;
       try {
-        const response = await api.get(`/profile/${currentUser.username}`);
+        const response = await api.get(`/profile/${targetUsername}`);
         if(response.data) {
+           setProfileData(response.data);
            if(response.data.bio) {
              setBio(response.data.bio);
              setTempBio(response.data.bio);
            }
            if(response.data.pfp_url) {
-             setPfp(response.data.pfp_url);
-             setTempPfp(response.data.pfp_url);
+             const timestamped = `${response.data.pfp_url}?t=${Date.now()}`;
+             setPfp(timestamped);
+             setTempPfp(timestamped);
+           }
+           if (response.data.followers && currentUser) {
+             setIsFollowing(response.data.followers.includes(currentUser.username));
            }
         }
       } catch (err) {
@@ -64,12 +81,44 @@ const Profile = () => {
     fetchMyPosts();
     fetchProfileData();
     
-    // Load saved posts from local storage
-    const storageKey = `saved_posts_${currentUser?.username}`;
-    const localSaved = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    setSavedPosts(localSaved);
+    if (isMe) {
+      const storageKey = `saved_posts_${currentUser?.username}`;
+      const localSaved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      setSavedPosts(localSaved);
+    }
     
-  }, [currentUser, activeTab]);
+  }, [targetUsername, currentUser, activeTab, isMe]);
+
+  const handleFollow = async () => {
+    try {
+      const res = await api.post('/follow', {
+        currentUsername: currentUser.username,
+        targetUsername: targetUsername
+      });
+      if (res.data.success) {
+        setIsFollowing(res.data.isFollowing);
+        // Refresh profile data to get updated counts
+        const response = await api.get(`/profile/${targetUsername}`);
+        setProfileData(response.data);
+      }
+    } catch (err) {
+      console.error("Follow error:", err);
+    }
+  };
+
+  const handleMessage = async () => {
+    try {
+      const res = await api.post('/conversations', {
+        sender: currentUser.username,
+        receiver: targetUsername
+      });
+      if (res.data) {
+        navigate('/chat', { state: { initialConversation: res.data } });
+      }
+    } catch (err) {
+      console.error("Message error:", err);
+    }
+  };
 
   const handleSaveProfile = async () => {
     setIsSaving(true);
@@ -87,8 +136,13 @@ const Profile = () => {
       
       if(res.data.success) {
          setBio(res.data.profile.bio);
-         if(res.data.profile.pfp_url) setPfp(res.data.profile.pfp_url);
+         if(res.data.profile.pfp_url) {
+            const timestamped = `${res.data.profile.pfp_url}?t=${Date.now()}`;
+            setPfp(timestamped);
+         }
          setIsEditing(false);
+         // Sync Globally
+         await refreshCurrentUser();
       }
     } catch(err) {
       console.error("Failed to update remote profile", err);
@@ -106,7 +160,7 @@ const Profile = () => {
         <div className="w-32 h-32 md:w-40 md:h-40 rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-1 shrink-0">
           <div className="w-full h-full bg-white rounded-full overflow-hidden border-4 border-white">
             <img 
-              src={pfp || `https://api.dicebear.com/7.x/notionists/svg?seed=${currentUser?.username}`} 
+              src={pfp || `https://api.dicebear.com/7.x/notionists/svg?seed=${targetUsername}`} 
               alt="avatar" 
               className="w-full h-full object-cover bg-gray-50"
             />
@@ -116,32 +170,51 @@ const Profile = () => {
         {/* Info */}
         <div className="flex-1 text-center md:text-left">
           <div className="flex flex-col md:flex-row md:items-center gap-4 mb-4 justify-center md:justify-start">
-            <h2 className="text-2xl font-medium text-gray-900">{currentUser?.username}</h2>
+            <h2 className="text-2xl font-medium text-gray-900">{targetUsername}</h2>
             <div className="flex gap-2 justify-center">
-              <button 
-                onClick={() => setIsEditing(true)}
-                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-lg font-semibold text-sm transition-colors flex items-center gap-2"
-              >
-                <FiEdit2 /> Edit profile
-              </button>
-              <button 
-                onClick={() => setShowSettings(true)}
-                className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-lg transition-colors cursor-pointer"
-                title="Settings"
-              >
-                <FiSettings />
-              </button>
+              {isMe ? (
+                <>
+                  <button 
+                    onClick={() => setIsEditing(true)}
+                    className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-lg font-semibold text-sm transition-colors flex items-center gap-2"
+                  >
+                    <FiEdit2 /> Edit profile
+                  </button>
+                  <button 
+                    onClick={() => setShowSettings(true)}
+                    className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-lg transition-colors cursor-pointer"
+                    title="Settings"
+                  >
+                    <FiSettings />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    onClick={handleFollow}
+                    className={`px-6 py-1.5 rounded-lg font-semibold text-sm transition-colors ${isFollowing ? 'bg-gray-200 text-gray-900' : 'bg-pink-600 text-white hover:bg-pink-700'}`}
+                  >
+                    {isFollowing ? 'Following' : 'Follow'}
+                  </button>
+                  <button 
+                    onClick={handleMessage}
+                    className="px-6 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-lg font-semibold text-sm transition-colors"
+                  >
+                    Message
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
           <div className="flex gap-6 justify-center md:justify-start mb-4 text-gray-900">
             <p><span className="font-semibold text-lg">{myPosts.length}</span> posts</p>
-            <p><span className="font-semibold text-lg">248</span> followers</p>
-            <p><span className="font-semibold text-lg">150</span> following</p>
+            <p><span className="font-semibold text-lg">{profileData?.followers?.length || 0}</span> followers</p>
+            <p><span className="font-semibold text-lg">{profileData?.following?.length || 0}</span> following</p>
           </div>
 
           <div className="max-w-md mx-auto md:mx-0">
-            <p className="font-medium text-sm text-gray-900">{currentUser?.username || 'User'}</p>
+            <p className="font-medium text-sm text-gray-900">{targetUsername}</p>
             <p className="text-sm text-gray-800 mt-1 whitespace-pre-line">{bio}</p>
           </div>
         </div>
@@ -169,6 +242,14 @@ const Profile = () => {
       {loading ? (
         <div className="flex justify-center mt-10">
            <div className="w-8 h-8 border-4 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      ) : isPrivateAccount ? (
+        <div className="mt-8 py-20 flex flex-col items-center justify-center bg-white rounded-3xl border border-gray-100 shadow-sm px-6 text-center">
+           <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6">
+              <FiX className="text-4xl text-gray-400" />
+           </div>
+           <h3 className="text-xl font-black text-gray-900">This account is private</h3>
+           <p className="text-gray-500 mt-2 max-w-xs">Follow this account to see their photos and videos.</p>
         </div>
       ) : activeTab === 'posts' && myPosts.length === 0 ? (
         <div className="mt-8 py-16 flex flex-col items-center justify-center bg-white/50 backdrop-blur-md rounded-3xl border border-gray-100/60">
@@ -345,14 +426,44 @@ const Profile = () => {
               </div>
               
               <div className="flex flex-col py-2">
-                 <button className="px-6 py-3 text-left hover:bg-gray-50 flex flex-col transition-colors">
-                    <span className="font-semibold text-gray-800">Your Activity</span>
-                    <span className="text-xs text-gray-500">Time spent, liked posts, comments</span>
+                 <button 
+                   onClick={() => {
+                     setShowSettings(false);
+                     navigate('/activity');
+                   }}
+                   className="px-6 py-4 text-left hover:bg-gray-50 flex flex-col transition-all active:scale-95"
+                 >
+                    <span className="font-bold text-gray-900">Your Activity</span>
+                    <span className="text-xs text-gray-500">Manage time, likes, and comments</span>
                  </button>
-                 <button className="px-6 py-3 text-left hover:bg-gray-50 flex flex-col transition-colors">
-                    <span className="font-semibold text-gray-800">Account Privacy</span>
-                    <span className="text-xs text-gray-500">Manage who can see your posts</span>
-                 </button>
+                 
+                 <div className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors cursor-pointer group" onClick={async () => {
+                   const newVal = !profileData?.isPrivate;
+                   try {
+                     const res = await api.patch('/profile/privacy', {
+                       username: currentUser.username,
+                       isPrivate: newVal
+                     });
+                     if (res.data.success) {
+                       setProfileData(prev => ({ ...prev, isPrivate: newVal }));
+                       alert(`Account is now ${newVal ? 'Private' : 'Public'}!`);
+                     }
+                   } catch(err) {
+                     console.error("Privacy toggle error:", err);
+                   }
+                 }}>
+                    <div className="flex flex-col">
+                       <span className="font-bold text-gray-900 group-hover:text-pink-600 transition-colors">Private Account</span>
+                       <span className="text-xs text-gray-500">Only followers can see your posts</span>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full transition-colors relative ${profileData?.isPrivate ? 'bg-pink-500' : 'bg-gray-200'}`}>
+                       <motion.div 
+                         animate={{ x: profileData?.isPrivate ? 24 : 4 }}
+                         className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm" 
+                       />
+                    </div>
+                 </div>
+
                  <button className="px-6 py-3 text-left hover:bg-gray-50 flex flex-col transition-colors">
                     <span className="font-semibold text-gray-800">Change Username</span>
                     <span className="text-xs text-gray-500">Currently: {currentUser?.username}</span>
